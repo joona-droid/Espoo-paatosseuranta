@@ -1,0 +1,170 @@
+# Espoon päätösseuranta – hakusäännöt
+#
+# Kuviot ovat säännöllisiä lausekkeita (regex), jotka verrataan pienaakkosiksi
+# muutettuun tekstiin. Käytä sanan alkuosaa, jotta kaikki taivutusmuodot osuvat:
+#   "otanie" osuu sanoihin Otaniemi, Otaniemessä, Otaniemen ...
+#
+# Pisteytys: jokainen osunut sääntö lasketaan kerran. Jos sääntö osuu otsikkoon,
+# se saa +1 lisäpisteen. Asia liputetaan SUORAKSI, kun pisteet >= kynnys.
+# Tätä pienemmät osumat menevät kielimallin arvioitavaksi (tai "tarkista"-listalle,
+# jos kielimallia ei käytetä).
+#
+# Kaksi lisätoimintoa:
+#   toimielimet:  sääntö on voimassa vain näiden toimielinten asioissa
+#                 (riittää osa nimestä, esim. 'liikunta- ja hyvinvointilautakunta')
+#   ['a', 'b']:   hakasulkeissa oleva kuvio osuu vain, jos KAIKKI sanat löytyvät
+#                 samasta asiasta (esim. ['seura', 'tila'] = seura JA tila)
+
+kynnys: 3
+
+saannot:
+  # --- Suorat: paikka ---
+  - nimi: Otaniemi
+    paino: 3
+    kuviot:
+      - 'otanie'
+      - 'otnäs'
+      - 'teekkarikyl'
+      - 'jämerän'          # Jämeräntaival
+      - 'otakaar'          # Otakaari
+      - 'otaranta'
+      - 'otahall'          # Otahalli
+  - nimi: Kaupunginosa 10 (tunnukset)
+    paino: 1               # kaupunginosa 10 = Otaniemi JA Keilaniemi, ei erota toisistaan
+    kuviot:
+      - '49-10-\d'                 # kiinteistötunnukset kaupunginosassa 10
+      - 'korttel\w*\s+10\d{3}\b'   # esim. "korttelin 10051" (Keilaniemi)
+      - '\b10\.\s*kaupunginosa'
+
+  # --- Suorat: toimijat ---
+  - nimi: Aalto-yliopisto
+    paino: 3
+    kuviot:
+      - 'aalto-yliopist'
+      - 'aalto university'
+      - 'aalto-universitet'
+      - 'aalto-korkeakoulusäätiö'
+  - nimi: AYY / ylioppilaskunta
+    paino: 3
+    kuviot:
+      - '\bayy\b'
+      - 'ylioppilaskun'
+      - 'studentkår'
+  - nimi: Opiskelija-asuminen
+    paino: 3
+    kuviot:
+      - '\bhoas\b'
+      - 'opiskelija-asun'
+      - 'opiskelija-asuin'
+      - 'studentbostad'
+
+  # --- Vahvat: kohderyhmä ---
+  - nimi: Opiskelijat ja korkeakoulut
+    paino: 2
+    kuviot:
+      - 'opiskelij'
+      - 'korkeakoul'
+      - 'yliopist'
+      - 'teekkar'
+      - '\bstudent'
+
+  # --- Heikot: todennäköisiä epäsuoria vaikutuksia ---
+  - nimi: Lähialueet
+    paino: 1
+    kuviot:
+      - 'laajalah'
+      - 'maarinran'
+      - 'servin maijan'
+      - 'kuusisaar'
+  - nimi: Joukkoliikenne ja liikkuminen
+    paino: 1
+    kuviot:
+      - '\bhsl\b'
+      - 'helsingin seudun liikenne'
+      - 'joukkoliikente'
+      - 'raide-jokeri'
+      - 'jokeri'
+      - 'länsimetro'
+      - 'kaupunkipyör'
+      - '\bpyöräil'
+  - nimi: Asuntopolitiikka
+    paino: 1
+    kuviot:
+      - 'asuntopoliti'
+      - 'vuokra-asun'
+      - 'kohtuuhintai'
+      - 'asuntotuotan'
+  - nimi: Kansainväliset osaajat ja työllisyys
+    paino: 1
+    kuviot:
+      - 'kansainväli\w* osaaj'
+      - 'kotoutu'
+      - 'talent'
+      - 'nuorten työllis'
+  - nimi: Innovaatio ja yhteistyö
+    paino: 1
+    kuviot:
+      - 'innovaatiokeskittym'
+      - 'kvantti'
+      - 'startup'
+      - 'tki-'
+
+  # --- Toimielinkohtaiset (sosiaalipolitiikan sektori) ---
+  - nimi: Kansainvälisyys ja työllisyys (elinkeinojaosto)
+    paino: 2
+    toimielimet: ['elinkeino- ja kilpailukykyjaosto']
+    kuviot:
+      - 'kansainväli'
+      - 'työllisy'
+      - 'työttömy'
+  - nimi: Liikuntatilojen käyttömaksut
+    paino: 2
+    toimielimet: ['liikunta- ja hyvinvointilautakunta']
+    kuviot:
+      - 'käyttömaks'
+      - 'liikuntatil'
+  - nimi: Seurat ja harrastustilat
+    paino: 2
+    toimielimet: ['liikunta- ja hyvinvointilautakunta']
+    kuviot:
+      - 'harrastustil'
+      - ['\bseur(?:a|an|at|oja|ojen|oille|oiden|oissa|alle)\b|urheiluseur|liikuntaseur',
+         '\btil(?:a|an|at|aa|oja|ojen|oihin|oissa|oista|oille)\b']
+      - ['harrastami', '\btil(?:a|an|at|aa|oja|ojen|oihin|oissa|oista|oille)\b']
+  - nimi: HSL ja pysäköinti (konserni- ja tilajaosto)
+    paino: 2
+    toimielimet: ['konserni- ja tilajaosto']
+    kuviot:
+      - '\bhsl\b'
+      - 'helsingin seudun liikenne'
+      - 'pysäköin'
+
+# Ilmaukset, jotka EIVÄT saa laukaista osumaa (poistetaan tekstistä ennen pisteytystä).
+# Lisäksi käsiteltävän toimielimen oma nimi ohitetaan aina automaattisesti.
+ohita_ilmaukset:
+  - 'korkeakoulututkin\w*'                            # opettajien kelpoisuusehdot
+  - 'korkeakoulu- ja yritysyhteistyö\w*'               # lukioiden työpaikkailmoitukset
+  - 'oppila\w*\s*(?:,|/|\bja\b)\s*(?:ja\s+)?opiskelij\w*'   # "oppilaan ja opiskelijan", "oppilas/opiskelija"
+  - 'lasta,\s+oppilasta\s+ja\s+opiskelijaa'
+
+# Asiat, joita ei kannata edes lähettää kielimallille (otsikon alku tai kuvio)
+ohita_otsikot:
+  - '^kokouksen laillisuuden'
+  - '^pöytäkirjan tarkastaj'
+  - '^kokouksen avaus'
+  - '^mötets laglighet'
+  - '^val av protokolljusterare'
+
+# Toimielinten järjestys raportissa (tärkeimmät ensin). Muut tulevat perään.
+toimielinten_jarjestys:
+  - Valtuusto
+  - Kaupunginhallitus
+  - Kaupunginhallituksen konserni- ja tilajaosto
+  - Kaupunginhallituksen elinkeino- ja kilpailukykyjaosto
+  - Kaupunginhallituksen työllisyys- ja kotoutumisjaosto
+  - Kaupunkisuunnittelulautakunta
+  - Tekninen lautakunta
+  - Kasvun ja oppimisen lautakunta
+  - Liikunta- ja hyvinvointilautakunta
+  - Kulttuuri- ja nuorisolautakunta
+  - Ympäristö- ja rakennuslautakunta
