@@ -139,6 +139,55 @@ def sentence_at(text: str, start: int, end: int, maxlen: int = 200) -> tuple[str
     return pre, hit, post
 
 
+def easter(year: int) -> dt.date:
+    """Pääsiäispäivä (gregoriaaninen kalenteri, Meeus/Jones/Butcher)."""
+    a, b, c = year % 19, year // 100, year % 100
+    d, e = b // 4, b % 4
+    f = (b + 8) // 25
+    g = (b - f + 1) // 3
+    h = (19 * a + b - d - g + 15) % 30
+    i, k = c // 4, c % 4
+    l = (32 + 2 * e + 2 * i - h - k) % 7
+    m = (a + 11 * h + 22 * l) // 451
+    month = (h + l - 7 * m + 114) // 31
+    day = (h + l - 7 * m + 114) % 31 + 1
+    return dt.date(year, month, day)
+
+
+def finnish_holidays(year: int) -> dict[dt.date, str]:
+    """Arkipäivälle osuvat vapaapäivät (ml. juhannus- ja jouluaatto)."""
+    e = easter(year)
+    midsummer_eve = next(dt.date(year, 6, d) for d in range(19, 26)
+                         if dt.date(year, 6, d).weekday() == 4)
+    return {
+        dt.date(year, 1, 1): "uudenvuodenpäivä",
+        dt.date(year, 1, 6): "loppiainen",
+        e - dt.timedelta(days=2): "pitkäperjantai",
+        e + dt.timedelta(days=1): "2. pääsiäispäivä",
+        dt.date(year, 5, 1): "vappu",
+        e + dt.timedelta(days=39): "helatorstai",
+        midsummer_eve: "juhannusaatto",
+        dt.date(year, 12, 6): "itsenäisyyspäivä",
+        dt.date(year, 12, 24): "jouluaatto",
+        dt.date(year, 12, 25): "joulupäivä",
+        dt.date(year, 12, 26): "tapaninpäivä",
+    }
+
+
+def helsinki_today() -> dt.date:
+    try:
+        from zoneinfo import ZoneInfo
+        return dt.datetime.now(ZoneInfo("Europe/Helsinki")).date()
+    except Exception:
+        return (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3)).date()
+
+
+def day_off_reason(d: dt.date) -> str | None:
+    if d.weekday() >= 5:
+        return "viikonloppu"
+    return finnish_holidays(d.year).get(d)
+
+
 def fi_date(d: dt.date | None) -> str:
     return f"{d.day}.{d.month}.{d.year}" if d else ""
 
@@ -868,6 +917,8 @@ def main(argv=None):
                    help="tulosta Telegram-viesti ruudulle (toimii myös --kuiva-tilassa)")
     p.add_argument("--testiviesti", action="store_true",
                    help="lähetä vain testiviesti Telegramiin ja lopeta")
+    p.add_argument("--vain-arkipaivina", action="store_true",
+                   help="älä tee mitään viikonloppuisin eikä arkipyhinä (Suomi)")
     p.add_argument("--tuloste", help="tallenna kooste myös tähän tiedostoon (myös --kuiva-tilassa)")
     p.add_argument("-v", "--verbose", action="store_true")
     a = p.parse_args(argv)
@@ -878,6 +929,12 @@ def main(argv=None):
             pass
     logging.basicConfig(level=logging.INFO if a.verbose else logging.WARNING,
                         format="%(levelname)s %(message)s")
+
+    if a.vain_arkipaivina:
+        reason = day_off_reason(helsinki_today())
+        if reason:
+            print(f"Tänään on {reason} – ei ajoa. Asiat käsitellään seuraavana arkipäivänä.")
+            return 0
 
     if a.telegram_id:
         return telegram_id_helper()
