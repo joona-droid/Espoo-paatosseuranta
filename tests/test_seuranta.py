@@ -176,3 +176,14 @@ def test_no_news_sent_once_per_day(tmp_path, monkeypatch):
     es.main(["--tietokanta", db])
     es.main(["--tietokanta", db])
     assert len(sent) == 1 and es.NO_NEWS in sent[0]
+
+
+def test_finnish_holidays():
+    h = es.finnish_holidays(2026)
+    assert h[dt.date(2026, 4, 3)] == "pitkäperjantai"      # pääsiäinen 5.4.2026
+    assert h[dt.date(2026, 4, 6)] == "2. pääsiäispäivä"
+    assert h[dt.date(2026, 5, 14)] == "helatorstai"
+    assert h[dt.date(2026, 6, 19)] == "juhannusaatto"
+    assert es.easter(2027) == dt.date(2027, 3, 28)
+    assert es.day_off_reason(dt.date(2026, 12, 7)) is None  # maanantai
+    assert es.day_off_reason(dt.date(2026, 9, 26)) == "viikonloppu"
