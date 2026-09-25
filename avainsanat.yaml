@@ -22,9 +22,9 @@ saannot:
   - nimi: Otaniemi
     paino: 3
     kuviot:
-      - 'otanie'
-      - 'otnäs'
-      - 'teekkarikyl'
+      - 'otanie'           # Otaniemi
+      - 'otnäs'            # Otaniemi, ruotsiksi
+      - 'teekkarikyl'      # Teekkarikylä
       - 'jämerän'          # Jämeräntaival
       - 'otakaar'          # Otakaari
       - 'otaranta'
