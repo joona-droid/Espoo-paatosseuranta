@@ -1,0 +1,37 @@
+name: Espoon päätösseuranta
+
+on:
+  schedule:
+    - cron: "0 5 * * 1-5"    # arkiaamuisin klo 8 (kesäaika) / 7 (talviaika)
+    - cron: "0 14 * * 1-5"   # arki-iltapäivisin klo 17 / 16
+  workflow_dispatch: {}      # mahdollistaa käsin ajon Actions-välilehdeltä
+
+permissions:
+  contents: write
+
+concurrency:
+  group: seuranta
+  cancel-in-progress: false
+
+jobs:
+  seuranta:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: Aja seuranta
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: python espoo_seuranta.py --syva --viranhaltijat --ei-llm -v
+      - name: Tallenna tila ja raportit
+        run: |
+          git config user.name "paatosseuranta-bot"
+          git config user.email "actions@users.noreply.github.com"
+          mkdir -p raportit data
+          git add -A data raportit
+          git diff --cached --quiet || git commit -m "Seuranta $(date -u +%F)"
+          git push
