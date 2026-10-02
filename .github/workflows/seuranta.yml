@@ -2,8 +2,7 @@ name: Espoon päätösseuranta
 
 on:
   schedule:
-    - cron: "0 5 * * 1-5"    # arkiaamuisin klo 8 (kesäaika) / 7 (talviaika)
-    - cron: "0 14 * * 1-5"   # arki-iltapäivisin klo 17 / 16
+    - cron: "0 5 * * 1-5"    # arkiaamuisin klo 8 (kesäaika) / 7 (talviaika), kerran päivässä
   workflow_dispatch: {}      # mahdollistaa käsin ajon Actions-välilehdeltä
 
 permissions:
