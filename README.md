@@ -1,80 +1,83 @@
-# Espoon päätösseuranta (prototyyppi)
+# Espoon päätösseuranta V1.1
 
-Skripti lukee Espoon Dynasty-palvelusta toimielinten **esityslistat** (ja halutessa
-pöytäkirjat ja viranhaltijapäätökset), pisteyttää jokaisen kokousasian avainsanoilla
-ja valinnaisesti kielimallilla, ja tekee koosteen Aaltoa, AYY:tä, Otaniemeä ja
-opiskelijoita koskevista asioista.
+Skripti lukee Espoon Dynasty-palvelusta toimielinten **esityslistat**, pöytäkirjat ja
+viranhaltijapäätökset, pisteyttää jokaisen asian avainsanoilla ja toimielimen tason
+mukaan, ja lähettää Telegram-kanavalle koosteen Aaltoa, AYY:tä, Otaniemeä ja
+opiskelijoita koskevista asioista. Ajo tapahtuu GitHub Actionsilla arkiaamuisin.
 
-## Käyttöönotto
+Muutokset versioittain: ks. [CHANGELOG.md](CHANGELOG.md).
 
-```bash
-pip install -r requirements.txt
-python -m pytest -q                                   # offline-testit
-python espoo_seuranta.py --kuiva -v --ei-llm          # ensimmäinen kokeilu, ei tallenna mitään
-python espoo_seuranta.py --kuiva -v --toimielin Kaupunginhallitus --syva --paivat 60
-```
+## Tiedostot
 
-Kun kuivaharjoitus näyttää järkevältä, aja ilman `--kuiva`-lippua. Tila tallentuu
-tiedostoon `data/seuranta.db`, jolloin samaa asiaa ei ilmoiteta kahdesti. Kooste
-tallentuu kansioon `raportit/`.
-
-### Liput
-
-| Lippu | Merkitys |
+| Tiedosto | Sisältö |
 |---|---|
-| `--toimielin X` | vain toimielimet, joiden nimessä on X (voi toistaa) |
-| `--kokous ID` | käsittele yksi kokous (id Dynastyn osoitteesta) |
-| `--syva` | hae toimielinten kokouslistat, ei vain etusivun uusinta kokousta |
-| `--paivat N` | aikaikkuna taaksepäin (oletus 21) |
-| `--poytakirjat` | käsittele myös pöytäkirjat (aiemmin liputettujen asioiden pöytäkirjat haetaan aina) |
-| `--viranhaltijat` | skannaa viranhaltijapäätösten 100 uusinta otsikkoa |
-| `--ei-llm` | pelkkä avainsanahaku |
-| `--kuiva` | ei tallennusta eikä Telegram-viestiä |
-
-### Ympäristömuuttujat
-
-- `ANTHROPIC_API_KEY` – kytkee kielimalliluokittelun päälle
-- `SEURANTA_MALLI` – oletus `claude-haiku-4-5-20251001`
-- `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` – kooste Telegramiin
+| `espoo_seuranta.py` | itse skripti |
+| `avainsanat.yaml` | avainsanat, ohitettavat ilmaukset ja **toimielintasot** – muokattavissa ilman ohjelmointia |
+| `data/seuranta.db` | tietokanta: jo nähdyt asiat ja niiden asianumerot |
+| `raportit/` | päiväkohtaiset raportit lainauksineen |
+| `.github/workflows/seuranta.yml` | ajastus |
+| `tests/` | testit (`python -m pytest -q`) |
 
 ## Miten liputus toimii
 
-1. **Avainsanat** (`avainsanat.yaml`): sanojen alkuosia regexinä, jotta taivutusmuodot
-   osuvat. Mukana myös Otaniemen kaupunginosan tunnukset (`49-10-…`, `korttelin 10xxx`),
-   jotka nappaavat asiat, joissa paikkaa ei mainita nimeltä.
-2. **Kielimalli** arvioi jokaisen asian (paitsi rutiinikohdat kuten laillisuuden
-   toteaminen) luokkiin suora / epäsuora / ei ja perustelee arvionsa.
-3. **Lopputulos**: suora, jos avainsanapisteet ylittävät kynnyksen tai malli sanoo
-   suora. Ilman kielimallia heikot osumat menevät "tarkista"-listalle.
+1. **Avainsanat** (`saannot` tiedostossa `avainsanat.yaml`) antavat asialle pisteitä.
+   Säännön voi rajata tiettyihin toimielimiin (`toimielimet:`), ja hakasulkeissa oleva
+   kuvio (`['seura', 'tila']`) osuu vain, jos kaikki sanat löytyvät samasta asiasta.
+2. **Toimielintaso** muuttaa pisteitä (`toimielintasot`):
 
-Sääntöjä voi muokata ilman ohjelmointia: lisää kuvio tai uusi sääntö YAML-tiedostoon.
-Säännön voi rajata tiettyihin toimielimiin (`toimielimet:`), ja hakasulkeissa oleva
-kuvio (`['seura', 'tila']`) osuu vain, jos kaikki sanat löytyvät samasta asiasta.
+   | Taso | Toimielimet | Vaikutus |
+   |---|---|---|
+   | A 🏛 | Valtuusto, Kaupunginhallitus | +1 |
+   | B | Kaupunkisuunnittelu, KH:n jaostot, Tekninen, Liikunta ja hyvinvointi | ±0 |
+   | C | Kasvu ja oppiminen, Kulttuuri ja nuoriso, Ympäristö ja rakennus | −1 |
+   | D | Tarkastus, Keskusvaali, Svenska rum | vain suorat nimiosumat |
+
+   Taso ei luo osumia tyhjästä: asia, jossa ei ole yhtään avainsanaa, ei nouse esiin.
+3. **Asianumeroseuranta**: jos aiemmin liputettu asia (sama asianumero) tulee toisen
+   toimielimen listalle, se nousee esiin automaattisesti – myös ilman avainsanoja – ja
+   viestissä näkyy mistä se eteni (esim. kaupunkisuunnittelulautakunta → KH).
+4. **Lopputulos**: suora, jos pisteet ≥ kynnys (3); muut osumat Tarkista-listalle.
+   Kielimalliluokittelu on valmiina, mutta pois päältä (`--ei-llm`).
 
 ## Telegram-viesti
 
-- Jokaisesta osumasta näytetään otsikko linkkinä, toimielin, osuneet avainsanat ja
-  lause, jossa osuma on (osuma lihavoituna). Tarkista-listan asiat yhdellä rivillä.
-- Jos uutta ei ole, botti lähettää kerran päivässä viestin
-  "Ei mitään ilmoitettavaa Espoon päätöksenteosta tänään."
-- Viestin alla on painikkeet 📋 Avainsanat ja 🗂 Raportit. GitHub Actionsissa osoitteet
-  muodostetaan automaattisesti reposta; muualla ne voi asettaa muuttujilla
-  `AVAINSANAT_URL` ja `RAPORTIT_URL`.
+- Viestissä ei ole otsikkoriviä: ensimmäinen rivi (🔴 Suoraan koskevat … tai
+  "Ei mitään ilmoitettavaa…") näkyy suoraan ilmoituksessa ja kanavalistassa.
+- Otsikko linkkinä, toimielin, osuneet avainsanat ja lause, jossa osuma on.
+- 🏛 = valtuusto tai kaupunginhallitus; ⬆ Eteni = asia on siirtynyt toimielimestä toiseen.
+- Jos uutta ei ole: "Ei mitään ilmoitettavaa Espoon päätöksenteosta tänään."
+- Painikkeet 📋 Avainsanat ja 🗂 Raportit (repo on julkinen, joten toimivat kaikille).
 
-## Ajastus GitHub Actionsilla
+## Ajastus
 
-Tiedosto `.github/workflows/seuranta.yml` ajaa skriptin arkisin kahdesti ja
-tallentaa tilan takaisin repoon. Lisää repositorion asetuksiin salaisuudet
-`ANTHROPIC_API_KEY`, `TELEGRAM_BOT_TOKEN` ja `TELEGRAM_CHAT_ID`.
+Kerran päivässä arkiaamuisin klo 8 (talviaikana klo 7), ei viikonloppuisin eikä arkipyhinä.
+Edellisen päivän aikana julkaistut asiat tulevat seuraavan aamun viestissä.
+Käsin käynnistetty ajo (Actions → Run workflow) ajetaan aina.
+Salaisuudet: `TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID` (ja myöhemmin `ANTHROPIC_API_KEY`).
+
+## Paikallinen käyttö
+
+```
+python -m venv .venv
+.venv\Scripts\activate            (Mac/Linux: source .venv/bin/activate)
+pip install -r requirements.txt pytest
+python -m pytest -q
+python espoo_seuranta.py --kuiva --ei-llm --syva --telegram-esikatselu
+```
+
+| Lippu | Merkitys |
+|---|---|
+| `--kuiva` | ei tallennusta eikä lähetystä |
+| `--syva` | hae toimielinten kokouslistat, ei vain uusinta kokousta |
+| `--viranhaltijat` | myös viranhaltijapäätösten otsikot |
+| `--toimielin X` / `--kokous ID` | rajaa ajo |
+| `--telegram-esikatselu` | tulosta Telegram-viesti ruudulle |
+| `--telegram-id` / `--testiviesti` | Telegram-asetusten tarkistus |
+| `--vain-arkipaivina` | ohita viikonloput ja arkipyhät |
+| `--version` | näytä versio |
 
 ## Tunnetut rajoitukset
 
-- **Jäsentimiä ei ole vielä ajettu oikeaa palvelinta vastaan.** Ne on rakennettu
-  Dynastyn sivurakenteen pohjalta ja testattu sitä jäljittelevillä fixtureilla.
-  Ensimmäinen `--kuiva -v` -ajo kertoo nopeasti, jos jokin kohta pitää säätää.
-- **Dynasty on istuntotilallinen**: sama istunto voi palauttaa eri sivun kuin
-  pyydettiin (esim. "seuraavan asian"). Skripti tarkistaa jokaisen sivun ja
-  nollaa istunnon tarvittaessa.
-- Viranhaltijapäätöksistä luetaan vain otsikko (koko teksti on PDF:nä).
-- Kaavoituskuulutukset ja Otakantaa.fi puuttuvat vielä; ne ovat seuraava lisäys.
-- Skripti pitää sekunnin tauon pyyntöjen välillä, ettei kuormita kaupungin palvelinta.
+- Viranhaltijapäätöksistä luetaan vain otsikko, joten niille ei ole asianumeroa.
+- Asianumeroseuranta kattaa asiat, jotka on liputettu suoriksi (tai kielimallin kanssa epäsuoriksi).
+- Kaavoituskuulutukset ja Otakantaa.fi puuttuvat vielä.

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Espoon päätösseuranta – prototyyppi
-===================================
+Espoon päätösseuranta V1.1
+==========================
 
 Lukee Espoon Dynasty-palvelusta (espoo.oncloudos.com) toimielinten esityslistat
 ja kokousasiat, pisteyttää ne avainsanasäännöillä ja valinnaisesti kielimallilla,
@@ -40,6 +40,7 @@ import requests
 import yaml
 from bs4 import BeautifulSoup
 
+VERSION = "1.1"
 log = logging.getLogger("seuranta")
 
 HOST = "https://espoo.oncloudos.com"
@@ -105,6 +106,9 @@ class Result:
     matches: list[dict] = field(default_factory=list)
     llm: dict | None = None
     category: str = "ei"   # suora / epäsuora / tarkista / ei
+    tier: str | None = None        # toimielintaso A/B/C/D
+    asianumero: str | None = None
+    advanced_from: dict | None = None   # aiempi käsittely toisessa toimielimessä
 
 
 # ---------------------------------------------------------------------------
@@ -400,6 +404,9 @@ class Rules:
     skip: list[re.Pattern]
     body_order: list[str]
     ignore: list[re.Pattern] = field(default_factory=list)
+    tiers: dict[str, dict] = field(default_factory=dict)
+    default_tier: str | None = None
+    official_tier: str | None = None
 
     @classmethod
     def load(cls, path: Path) -> "Rules":
@@ -426,10 +433,56 @@ class Rules:
         except (KeyError, TypeError, ValueError) as e:
             sys.exit(f"Sääntötiedostossa {path.name} puuttuu tai on väärin kenttä: {e}. "
                      "Jokaisella säännöllä pitää olla nimi, paino ja kuviot.")
+        tcfg = cfg.get("toimielintasot") or {}
+        tiers = {}
+        for key, t in (tcfg.get("tasot") or {}).items():
+            tiers[str(key)] = {
+                "nimi": t.get("nimi", str(key)),
+                "muutos": int(t.get("muutos", 0)),
+                "merkki": t.get("merkki", ""),
+                "vain_vahvat": bool(t.get("vain_vahvat", False)),
+                "toimielimet": [str(x).lower() for x in (t.get("toimielimet") or [])],
+            }
+        for k in ("oletustaso", "viranhaltijataso"):
+            if tcfg.get(k) is not None and str(tcfg[k]) not in tiers:
+                sys.exit(f"Sääntötiedostossa {path.name}: {k} '{tcfg[k]}' ei ole määritelty taso.")
         return cls(int(cfg.get("kynnys", 3)), rules,
                    [re.compile(p, re.I) for p in cfg.get("ohita_otsikot", [])],
                    cfg.get("toimielinten_jarjestys", []),
-                   [re.compile(p, re.I) for p in cfg.get("ohita_ilmaukset", [])])
+                   [re.compile(p, re.I) for p in cfg.get("ohita_ilmaukset", [])],
+                   tiers,
+                   str(tcfg["oletustaso"]) if tcfg.get("oletustaso") is not None else None,
+                   str(tcfg["viranhaltijataso"]) if tcfg.get("viranhaltijataso") is not None else None)
+
+    def tier_of(self, body: str, official: bool = False) -> str | None:
+        """Toimielimen taso: tarkka nimi ensin, sitten pisin osittainen osuma."""
+        if official:
+            return self.official_tier
+        b = body.lower().strip()
+        best, best_len = None, -1
+        for key, t in self.tiers.items():
+            for name in t["toimielimet"]:
+                if b == name:
+                    return key
+                if name in b and len(name) > best_len:
+                    best, best_len = key, len(name)
+        return best or self.default_tier
+
+    def apply_tier(self, score: int, hits: list[dict], tier: str | None) -> int:
+        """Tason vaikutus pisteisiin. Ei luo osumia tyhjästä."""
+        t = self.tiers.get(tier or "")
+        if not t or score <= 0:
+            return score
+        if t["vain_vahvat"] and not any(h.get("paino", 0) >= 3 for h in hits):
+            return 0
+        return max(0, score + t["muutos"])
+
+    def tier_rank(self, tier: str | None) -> int:
+        keys = list(self.tiers)
+        return keys.index(tier) if tier in keys else len(keys)
+
+    def tier_mark(self, tier: str | None) -> str:
+        return self.tiers.get(tier or "", {}).get("merkki", "")
 
     def skip_title(self, title: str) -> bool:
         return any(p.search(title.strip()) for p in self.skip)
@@ -471,7 +524,8 @@ class Rules:
                 ws = orig[:m.start()]
                 w0 = len(ws) - len(re.split(r"[\s(),.;:/\"“”]", ws)[-1])
                 w1 = m.end() + len(re.split(r"[\s(),.;:/\"“”]", orig[m.end():])[0])
-                hits.append({"saanto": name, "osuma": m.group(0), "otsikossa": bool(in_title),
+                hits.append({"saanto": name, "paino": weight, "osuma": m.group(0),
+                             "otsikossa": bool(in_title),
                              "sana": orig[w0:w1].strip(),
                              "lause": sentence_at(orig, w0, w1),
                              "ote": ("…" if a else "") + snippet + ("…" if b < len(src) else "")})
@@ -537,7 +591,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (
     item_id TEXT, doctype TEXT, body TEXT, meeting_date TEXT, title TEXT, url TEXT,
     text_hash TEXT, score INTEGER, matches TEXT, llm TEXT, category TEXT,
-    first_seen TEXT, notified INTEGER DEFAULT 0,
+    first_seen TEXT, notified INTEGER DEFAULT 0, asianumero TEXT, tier TEXT,
     PRIMARY KEY (item_id, doctype));
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 CREATE TABLE IF NOT EXISTS officials (
@@ -551,6 +605,12 @@ class Store:
     def __init__(self, path: Path | None):
         self.db = sqlite3.connect(str(path) if path else ":memory:")
         self.db.executescript(SCHEMA)
+        cols = {r[1] for r in self.db.execute("PRAGMA table_info(items)")}
+        for col in ("asianumero", "tier"):          # V1.0-tietokannan päivitys
+            if col not in cols:
+                self.db.execute(f"ALTER TABLE items ADD COLUMN {col} TEXT")
+        self.db.execute("CREATE INDEX IF NOT EXISTS idx_items_asianumero ON items(asianumero)")
+        self.db.commit()
 
     def seen(self, item_id: str, doctype: str) -> bool:
         return self.db.execute("SELECT 1 FROM items WHERE item_id=? AND doctype=?",
@@ -567,13 +627,29 @@ class Store:
 
     def save(self, r: Result, text: str):
         self.db.execute(
-            "INSERT OR REPLACE INTO items VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0)",
+            "INSERT OR REPLACE INTO items (item_id, doctype, body, meeting_date, title, url, "
+            "text_hash, score, matches, llm, category, first_seen, notified, asianumero, tier) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,0,?,?)",
             (r.item_id, r.doctype, r.body, r.date.isoformat() if r.date else None, r.title,
              r.url, hashlib.sha1(text.encode()).hexdigest(), r.score,
              json.dumps(r.matches, ensure_ascii=False),
              json.dumps(r.llm, ensure_ascii=False) if r.llm else None,
-             r.category, dt.datetime.now().isoformat(timespec="seconds")))
+             r.category, dt.datetime.now().isoformat(timespec="seconds"),
+             r.asianumero, r.tier))
         self.db.commit()
+
+    def earlier_handling(self, asianumero: str | None, body: str) -> dict | None:
+        """Sama asia (asianumero) liputettuna aiemmin TOISESSA toimielimessä."""
+        if not asianumero:
+            return None
+        row = self.db.execute(
+            "SELECT body, meeting_date, title, url, category FROM items "
+            "WHERE asianumero=? AND lower(body)<>lower(?) AND category IN ('suora','epäsuora') "
+            "ORDER BY meeting_date DESC LIMIT 1", (asianumero, body)).fetchone()
+        if not row:
+            return None
+        d = dt.date.fromisoformat(row[1]) if row[1] else None
+        return {"body": row[0], "date": d, "title": row[2], "url": row[3], "category": row[4]}
 
     def save_official(self, d: dict, r: Result):
         self.db.execute(
@@ -646,6 +722,7 @@ class Monitor:
             if self.store.seen(it.item_id, m.doctype) and not self.a.kuiva:
                 continue
             res = Result(it.item_id, m.doctype, m.body, m.date, it.title, item_url(it.item_id))
+            res.tier = self.rules.tier_of(m.body)
             if self.rules.skip_title(it.title):
                 res.category = "ei"
                 self.store.save(res, "")
@@ -653,13 +730,22 @@ class Monitor:
             try:
                 detail = parse_item(self.net.get("meetingitem", it.item_id))
                 text = detail.text + "\n" + "\n".join(detail.attachments)
+                res.asianumero = detail.asianumero
             except Exception as e:
                 log.warning("Asian %s haku epäonnistui: %s – käytetään otsikkoa", it.item_id, e)
                 text = ""
-            res.score, res.matches = self.rules.score(it.title, text, m.body)
-            if self.api_key:
+            raw, res.matches = self.rules.score(it.title, text, m.body)
+            res.score = self.rules.apply_tier(raw, res.matches, res.tier)
+            strict = self.rules.tiers.get(res.tier or "", {}).get("vain_vahvat")
+            if self.api_key and (res.score > 0 or not strict):
                 res.llm = llm_classify(res, text or it.title, self.model, self.api_key)
             res.category = decide(res.score, self.rules.threshold, res.llm)
+            # Asianumeroseuranta: aiemmin liputettu asia etenee toiseen toimielimeen
+            earlier = self.store.earlier_handling(res.asianumero, m.body)
+            if earlier:
+                res.advanced_from = earlier
+                if CAT_RANK[earlier["category"]] < CAT_RANK[res.category]:
+                    res.category = earlier["category"]
             prev = self.store.flagged_before(it.item_id)
             self.store.save(res, text)
             if res.category in ("suora", "epäsuora", "tarkista"):
@@ -676,7 +762,9 @@ class Monitor:
             if not d["id"] or (self.store.seen_official(d["id"]) and not self.a.kuiva):
                 continue
             res = Result(d["id"], "Viranhaltijapäätös", d["official"], d["date"], d["title"], d["url"])
-            res.score, res.matches = self.rules.score(d["title"], "")
+            res.tier = self.rules.tier_of(d["official"], official=True)
+            raw, res.matches = self.rules.score(d["title"], "")
+            res.score = self.rules.apply_tier(raw, res.matches, res.tier)
             if self.api_key and res.score > 0:   # otsikko ilman osumia harvoin relevantti
                 res.llm = llm_classify(res, d["title"], self.model, self.api_key)
             res.category = decide(res.score, self.rules.threshold, res.llm)
@@ -684,7 +772,26 @@ class Monitor:
             if res.category != "ei":
                 self.results.append(res)
 
+    def backfill_case_numbers(self, limit: int = 40):
+        """V1.0:n liputtamilta asioilta puuttuu asianumero – haetaan ne kerran."""
+        rows = self.store.db.execute(
+            "SELECT item_id, doctype FROM items WHERE asianumero IS NULL "
+            "AND category IN ('suora','epäsuora') AND item_id LIKE '%-%' LIMIT ?",
+            (limit,)).fetchall()
+        for item_id, doctype in rows:
+            try:
+                num = parse_item(self.net.get("meetingitem", item_id)).asianumero
+            except Exception as e:
+                log.warning("Asianumeron täydennys epäonnistui (%s): %s", item_id, e)
+                continue
+            self.store.db.execute("UPDATE items SET asianumero=? WHERE item_id=? AND doctype=?",
+                                  (num or "", item_id, doctype))
+            log.info("Asianumero täydennetty: %s → %s", item_id, num or "(ei asianumeroa)")
+        self.store.db.commit()
+
     def run(self):
+        if not self.a.kuiva:
+            self.backfill_case_numbers()
         todo = self.meetings_to_scan()
         log.info("Käydään läpi %d kokousta", len(todo))
         for j, (mid, name) in enumerate(todo, 1):
@@ -703,6 +810,7 @@ class Monitor:
 # ---------------------------------------------------------------------------
 # Raportointi
 # ---------------------------------------------------------------------------
+CAT_RANK = {"suora": 0, "epäsuora": 1, "tarkista": 2, "ei": 3}
 CAT_LABEL = {"suora": "🔴 Suoraan koskevat", "epäsuora": "🟡 Epäsuorasti koskevat",
              "tarkista": "⚪ Tarkista (heikko avainsanaosuma, ei kielimallia)"}
 
@@ -712,8 +820,9 @@ def build_digest(results: list[Result], outcomes: list[Result], rules: Rules) ->
     if not results and not outcomes:
         return f"Espoon päätösseuranta {today}: ei uusia liputettuja asioita."
     order = {n.lower(): i for i, n in enumerate(rules.body_order)}
-    key = lambda r: (order.get(r.body.lower(), 99), r.date or dt.date.max, -r.score)
-    lines = [f"# Espoon päätösseuranta {today}", ""]
+    key = lambda r: (rules.tier_rank(r.tier), order.get(r.body.lower(), 99),
+                     r.date or dt.date.max, -r.score)
+    lines = [f"# Espoon päätösseuranta {today} (V{VERSION})", ""]
     for cat in ("suora", "epäsuora", "tarkista"):
         group = sorted([r for r in results if r.category == cat], key=key)
         if not group:
@@ -721,8 +830,15 @@ def build_digest(results: list[Result], outcomes: list[Result], rules: Rules) ->
         lines += [f"## {CAT_LABEL[cat]} ({len(group)})", ""]
         for r in group:
             when = fi_date(r.date)
-            lines.append(f"**{r.body} – {r.doctype} {when}**  ")
+            mark = rules.tier_mark(r.tier)
+            tier_txt = f" · taso {r.tier}" if r.tier else ""
+            lines.append(f"**{(mark + ' ') if mark else ''}{r.body} – {r.doctype} {when}**{tier_txt}  ")
             lines.append(f"{r.title}  ")
+            if r.asianumero:
+                lines.append(f"_Asianumero:_ {r.asianumero}  ")
+            if r.advanced_from:
+                a = r.advanced_from
+                lines.append(f"_⬆ Eteni:_ {a['body']} {fi_date(a['date'])} → {r.body} ({a['url']})  ")
             if r.llm:
                 lines.append(f"_Arvio:_ {r.llm.get('perustelu', '')}  ")
             if r.matches:
@@ -777,20 +893,23 @@ def _context(r: Result) -> str | None:
 
 def build_telegram(results: list[Result], outcomes: list[Result], rules: Rules) -> str:
     """Tiivis ilmoitus: otsikko linkkinä, toimielin ja päivä, osuneet sanat ja osumalause."""
-    head = f"<b>Espoon päätösseuranta {fi_date(dt.date.today())}</b>"
+    # Ei otsikkoriviä: viestin ensimmäinen rivi näkyy ilmoituksessa ja kanavalistassa,
+    # joten sen pitää kertoa heti, onko uutta.
     if not results and not outcomes:
-        return f"{head}\n\n{NO_NEWS}"
+        return NO_NEWS
     order = {n.lower(): i for i, n in enumerate(rules.body_order)}
-    key = lambda r: (r.doctype == "Viranhaltijapäätös", order.get(r.body.lower(), 99),
-                     r.date or dt.date.max, -r.score)
-    out = [head]
+    key = lambda r: (r.doctype == "Viranhaltijapäätös", rules.tier_rank(r.tier),
+                     order.get(r.body.lower(), 99), r.date or dt.date.max, -r.score)
+    out = []
     for cat in ("suora", "epäsuora", "tarkista"):
         group = sorted([r for r in results if r.category == cat], key=key)
         if not group:
             continue
-        out += ["", f"{TG_LABEL[cat]} ({len(group)})"]
+        out += ([""] if out else []) + [f"{TG_LABEL[cat]} ({len(group)})"]
         for r in group:
-            link = f'<a href="{_esc(r.url)}">{_esc(_short_title(r.title))}</a>'
+            mark = rules.tier_mark(r.tier)
+            link = (f"{mark} " if mark else "") + \
+                f'<a href="{_esc(r.url)}">{_esc(_short_title(r.title))}</a>'
             kind = "viranhaltija" if r.doctype == "Viranhaltijapäätös" else r.doctype.lower()
             meta = f"{_esc(r.body)} · {kind} {_dd(r.date)}"
             words = _words(r)
@@ -798,6 +917,10 @@ def build_telegram(results: list[Result], outcomes: list[Result], rules: Rules) 
                 out.append(f"• {link}" + (f" · <i>{_esc(words)}</i>" if words else ""))
                 continue
             out += ["", link, meta + (f" · <i>{_esc(words)}</i>" if words else "")]
+            if r.advanced_from:
+                a = r.advanced_from
+                out.append(f'⬆ Eteni: <a href="{_esc(a["url"])}">{_esc(a["body"])} '
+                           f'{_dd(a["date"])}</a> → {_esc(r.body)}')
             if r.llm and r.llm.get("perustelu"):
                 out.append(f"↳ {_esc(r.llm['perustelu'])}")
             else:
@@ -805,7 +928,7 @@ def build_telegram(results: list[Result], outcomes: list[Result], rules: Rules) 
                 if ctx:
                     out.append(f"↳ {ctx}")
     if outcomes:
-        out += ["", "✅ <b>Pöytäkirja julkaistu aiemmin liputetuista</b>"]
+        out += ([""] if out else []) + ["✅ <b>Pöytäkirja julkaistu aiemmin liputetuista</b>"]
         out += [f'• <a href="{_esc(r.url)}">{_esc(r.title)}</a> <i>({_esc(r.body)})</i>' for r in outcomes]
     return "\n".join(out)
 
@@ -899,7 +1022,8 @@ def telegram_id_helper() -> int:
 
 # ---------------------------------------------------------------------------
 def main(argv=None):
-    p = argparse.ArgumentParser(description="Espoon päätösseuranta (Dynasty)")
+    p = argparse.ArgumentParser(description=f"Espoon päätösseuranta V{VERSION} (Dynasty)")
+    p.add_argument("--version", action="version", version=f"Espoon päätösseuranta V{VERSION}")
     p.add_argument("--toimielin", action="append", help="rajaa toimielimeen (osa nimestä), voi toistaa")
     p.add_argument("--kokous", action="append", help="käsittele vain tämä kokous-id, voi toistaa")
     p.add_argument("--paivat", type=int, default=21, help="aikaikkuna taaksepäin päivinä (oletus 21)")

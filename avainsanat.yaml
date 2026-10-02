@@ -22,9 +22,9 @@ saannot:
   - nimi: Otaniemi
     paino: 3
     kuviot:
-      - 'otanie'           # Otaniemi
-      - 'otnäs'            # Otaniemi, ruotsiksi
-      - 'teekkarikyl'      # Teekkarikylä
+      - 'otanie'
+      - 'otnäs'
+      - 'teekkarikyl'
       - 'jämerän'          # Jämeräntaival
       - 'otakaar'          # Otakaari
       - 'otaranta'
@@ -155,7 +155,52 @@ ohita_otsikot:
   - '^mötets laglighet'
   - '^val av protokolljusterare'
 
-# Toimielinten järjestys raportissa (tärkeimmät ensin). Muut tulevat perään.
+# Toimielintasot (V1.1)
+# Taso muuttaa asian pisteitä sen jälkeen, kun avainsanat on laskettu:
+#   muutos:       lisätään pisteisiin, jos asiassa on vähintään yksi osuma
+#   vain_vahvat:  asia huomioidaan vain, jos jokin painon 3 sääntö osuu
+#                 (Otaniemi, Aalto, AYY, opiskelija-asuminen)
+#   merkki:       näkyy Telegram-viestissä otsikon edessä
+# Toimielimen nimi verrataan ensin tarkasti, sitten osittain (pisin osuma voittaa).
+toimielintasot:
+  oletustaso: B            # listaamattomat toimielimet
+  viranhaltijataso: B      # viranhaltijapäätökset
+  tasot:
+    A:
+      nimi: Ylin päätösvalta
+      muutos: 1
+      merkki: '🏛'
+      toimielimet:
+        - Valtuusto
+        - Kaupunginhallitus
+    B:
+      nimi: Opiskelijoille keskeiset
+      muutos: 0
+      toimielimet:
+        - Kaupunkisuunnittelulautakunta
+        - Kaupunginhallituksen konserni- ja tilajaosto
+        - Kaupunginhallituksen elinkeino- ja kilpailukykyjaosto
+        - Kaupunginhallituksen työllisyys- ja kotoutumisjaosto
+        - Tekninen lautakunta
+        - Liikunta- ja hyvinvointilautakunta
+    C:
+      nimi: Toissijaiset
+      muutos: -1
+      toimielimet:
+        - Kasvun ja oppimisen lautakunta
+        - Kasvun ja oppimisen lautakunnan nuorisoasiainjaosto
+        - Kulttuuri- ja nuorisolautakunta
+        - Ympäristö- ja rakennuslautakunta
+    D:
+      nimi: Ei seurata (paitsi suorat nimiosumat)
+      muutos: 0
+      vain_vahvat: true
+      toimielimet:
+        - Tarkastuslautakunta
+        - Keskusvaalilautakunta
+        - Nämnden Svenska rum
+
+# Toimielinten järjestys raportissa saman tason sisällä (tärkeimmät ensin).
 toimielinten_jarjestys:
   - Valtuusto
   - Kaupunginhallitus
