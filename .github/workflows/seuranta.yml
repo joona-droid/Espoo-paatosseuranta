@@ -32,5 +32,13 @@ jobs:
           git config user.email "actions@users.noreply.github.com"
           mkdir -p raportit data
           git add -A data raportit
-          git diff --cached --quiet || git commit -m "Seuranta $(date -u +%F)"
-          git push
+          if git diff --cached --quiet; then echo "Ei tallennettavaa"; exit 0; fi
+          git commit -m "Seuranta $(date -u +%F)"
+          # Jos repoon on tullut muutoksia ajon aikana (esim. avainsanojen muokkaus),
+          # haetaan ne ensin ja yritetään uudelleen.
+          for i in 1 2 3; do
+            git pull --rebase origin main && git push && exit 0
+            echo "Tallennus epäonnistui, yritetään uudelleen ($i/3)…"
+            sleep 5
+          done
+          exit 1
